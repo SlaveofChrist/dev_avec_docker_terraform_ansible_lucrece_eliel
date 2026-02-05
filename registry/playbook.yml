@@ -1,0 +1,82 @@
+---
+- name: Déploiement Registry Simple (HTTP)
+  hosts: registry_hosts
+  become: true
+  vars:
+    project_dir: "/home/ubuntu/registry-simple"
+    # L'IP publique est récupérée automatiquement pour la config de l'UI
+    public_ip: "{{ ansible_host }}"
+
+  tasks:
+    # 1. Installation Docker
+    - name: Installation des paquets
+      apt:
+        update_cache: yes
+        name:
+          - docker.io
+          - docker-compose-v2
+          - apache2-utils
+          - python3-passlib
+        state: present
+
+    - name: Ajout user au groupe docker
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    # 2. Dossiers
+    - name: Création des dossiers
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+      loop:
+        - "{{ project_dir }}"
+        - "{{ project_dir }}/auth"
+        - "{{ project_dir }}/data"
+
+    # 3. Auth (Mot de passe)
+    - name: Génération mot de passe (admin/admin123)
+      htpasswd:
+        path: "{{ project_dir }}/auth/registry.password"
+        name: admin
+        password: admin123
+        owner: ubuntu
+        group: ubuntu
+        mode: 0640
+        crypt_scheme: bcrypt
+
+    # 4. Docker Compose (Templated)
+    # On utilise 'template' au lieu de 'copy' pour que la variable {{ public_ip }}
+    # soit remplacée par la vraie adresse IP lors du transfert.
+    - name: Copie du docker-compose.yml
+      template:
+        src: docker-compose.yml
+        dest: "{{ project_dir }}/docker-compose.yml"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+
+    - name: Stop stack
+      command: docker compose stop
+      args:
+        chdir: "{{ project_dir }}"
+
+    # 5. Start
+    - name: Démarrage de la stack
+      command: docker compose up --force-recreate -d
+      args:
+        chdir: "{{ project_dir }}"
+
+    - name: Récupération du statut des conteneurs
+      command: docker compose ps
+      args:
+        chdir: "{{ project_dir }}"
+      register: compose_ps_output
+
+    - name: Affichage du statut final dans la console
+      debug:
+        msg: "{{ compose_ps_output.stdout_lines }}"

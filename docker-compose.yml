@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  # 1. Le Frontend (Nginx)
+  frontend:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro # Read-only par sécurité
+
+  # 2. Base de données (Postgres)
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-ynov_ci}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Monte tous les scripts SQL (le migration-v001 et le nouveau)
+      - ./sqlfiles:/docker-entrypoint-initdb.d
+    # HEALTHCHECK : Essentiel pour l'orchestration
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3. Cache (Redis)
+  redis:
+    image: redis:alpine
+    restart: always
+    # Pas de ports exposés à l'hôte (Sécurité)
+    volumes:
+      - redis_data:/data
+    # HEALTHCHECK Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 3
+
+  # 4. API (Python)
+  api:
+    build:
+      context: .
+      dockerfile: python.Dockerfile
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-ynov_ci}
+      REDIS_HOST: redis
+    # ORCHESTRATION FORTE : Attend que les services soient 'Healthy'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Commande lancée avec l'utilisateur non-root (voir Dockerfile)
+    command: uvicorn main:app --proxy-headers --host 0.0.0.0 --port 8000
+
+volumes:
+  postgres_data:
+  redis_data:
