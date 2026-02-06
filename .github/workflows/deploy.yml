@@ -44,18 +44,39 @@ jobs:
         run: |
           echo "Nettoyage des ressources AWS existantes..."
           
+          # Supprimer les instances EC2 existantes
+          INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=Terraform-App-FullStack" "Name=instance-state-name,Values=running,stopped" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
+          if [ ! -z "$INSTANCE_IDS" ]; then
+            echo "Suppression des instances EC2: $INSTANCE_IDS"
+            aws ec2 terminate-instances --instance-ids $INSTANCE_IDS || true
+            aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS 2>/dev/null || true
+            echo "Instances terminées."
+          fi
+          
           # Supprimer la clé SSH si elle existe
           if aws ec2 describe-key-pairs --key-names app-key-terraform 2>/dev/null | grep -q "app-key-terraform"; then
             echo "Suppression de la clé SSH: app-key-terraform"
             aws ec2 delete-key-pair --key-name app-key-terraform || true
           fi
           
-          # Supprimer le Security Group si il existe
+          # Supprimer le Security Group (attendre que les interfaces réseau soient libérées)
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=app-sg-fullstack" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$SG_ID" != "None" ] && [ ! -z "$SG_ID" ]; then
-            echo "Suppression du Security Group: $SG_ID"
-            aws ec2 delete-security-group --group-id $SG_ID || true
-            sleep 5
+            echo "Security Group trouvé: $SG_ID"
+            # Attendre 30 secondes que les instances soient complètement libérées
+            echo "Attente de 30 secondes avant suppression du Security Group..."
+            sleep 30
+            
+            # Essayer de supprimer le SG plusieurs fois
+            for i in {1..5}; do
+              if aws ec2 delete-security-group --group-id $SG_ID 2>/dev/null; then
+                echo "Security Group supprimé avec succès."
+                break
+              else
+                echo "Tentative $i échouée. Nouvelle tentative dans 10 secondes..."
+                sleep 10
+              fi
+            done
           fi
           
           echo "Nettoyage terminé."
