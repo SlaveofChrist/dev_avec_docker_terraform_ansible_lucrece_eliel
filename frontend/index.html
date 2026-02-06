@@ -40,7 +40,7 @@
          * Note pour les étudiants : Le frontend tourne dans le navigateur de l'utilisateur.
          * Il accède donc à l'API via localhost (port exposé par Docker), pas via le réseau interne Docker.
          */
-        const API_URL = "http://localhost:8000"; 
+        const API_URL = "http://{{ public_ip }}:8000"; 
 
         async function fetchStudents() {
             const statusDiv = document.getElementById('status');
