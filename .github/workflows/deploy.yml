@@ -122,6 +122,16 @@ jobs:
         run: terraform apply -auto-approve tfplan
         working-directory: ${{ github.workspace }}
 
+      - name: Get Instance IP
+        id: tf_output
+        run: |
+          INSTANCE_IP=$(terraform output -raw instance_ip 2>/dev/null)
+          echo "instance_ip=${INSTANCE_IP}" >> $GITHUB_OUTPUT
+          echo "Instance IP: ${INSTANCE_IP}"
+        working-directory: ${{ github.workspace }}
+        env:
+          TF_LOG: off
+
       - name: Save Terraform State (Artifact)
         uses: actions/upload-artifact@v4
         with:
