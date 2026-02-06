@@ -125,10 +125,20 @@ jobs:
       - name: Get Instance IP
         id: tf_output
         run: |
+          echo "=========================================="
+          echo "Récupération de l'IP de l'instance EC2..."
+          echo "=========================================="
+          
           INSTANCE_IP=$(terraform output -raw instance_ip 2>/dev/null)
           INSTANCE_IP=$(echo $INSTANCE_IP | sed 's/::.*//')
+          
+          # Stockage dans les outputs (pour le job notify)
           echo "instance_ip=${INSTANCE_IP}" >> $GITHUB_OUTPUT
-          echo "Instance IP: ${INSTANCE_IP}"
+          
+          # Stockage dans GITHUB_ENV (accessible dans les étapes du Terraform job)
+          echo "INSTANCE_IP=${INSTANCE_IP}" >> $GITHUB_ENV
+          
+          echo "✅ Instance IP extraite: ${INSTANCE_IP}"
         working-directory: ${{ github.workspace }}
         env:
           TF_LOG: off
@@ -143,10 +153,26 @@ jobs:
     name: Ansible Deploy
     runs-on: ubuntu-latest
     needs: terraform
+    env:
+      # Récupération de l'IP créée par Terraform (disponible dans tout le job)
+      INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Verify Instance IP Passed
+        run: |
+          echo "=========================================="
+          echo "Vérification du pont Terraform -> Ansible"
+          echo "=========================================="
+          echo "Instance IP reçue: ${INSTANCE_IP}"
+          
+          if [ -z "${INSTANCE_IP}" ]; then
+            echo "❌ ERREUR: L'IP de l'instance n'a pas été transmise!"
+            exit 1
+          fi
+          echo "✅ IP valide reçue depuis Terraform"
 
       - name: Install Ansible
         run: |
@@ -155,9 +181,20 @@ jobs:
 
       - name: Update inventory.ini with Instance IP
         run: |
-          INSTANCE_IP=${{ needs.terraform.outputs.instance_ip }}
-          sed -i "s/^# Cette IP sera remplacée par la sortie de main.tf$/# Instance IP: $INSTANCE_IP/" inventory.ini
-          sed -i "s/^13\.39\.13\.141$/$INSTANCE_IP/" inventory.ini
+          echo "=========================================="
+          echo "Mise à jour de l'inventory.ini"
+          echo "=========================================="
+          echo "Utilisation de l'IP: ${INSTANCE_IP}"
+          
+          # Backup de l'inventory original
+          cp inventory.ini inventory.ini.bak
+          
+          # Remplacement de l'IP dynamiquement
+          sed -i "s/^# Cette IP sera remplacée par la sortie de main.tf$/# Instance IP: ${INSTANCE_IP}/" inventory.ini
+          sed -i "s/^13\.39\.13\.141$/${INSTANCE_IP}/" inventory.ini
+          sed -i "s/^[0-9.]\{7,15\}$/${INSTANCE_IP}/" inventory.ini
+          
+          echo "Contenu de l'inventory.ini mis à jour:"
           cat inventory.ini
 
       - name: Download SSH Key from Terraform
@@ -186,15 +223,17 @@ jobs:
 
       - name: Verify Deployment
         run: |
-          INSTANCE_IP=${{ needs.terraform.outputs.instance_ip }}
           echo ""
           echo "=========================================="
           echo "Déploiement terminé!"
           echo "=========================================="
-          echo "Frontend:  http://$INSTANCE_IP:8080"
-          echo "API:       http://$INSTANCE_IP:8000"
-          echo "PostgreSQL: $INSTANCE_IP:5432"
-          echo "Redis:     $INSTANCE_IP:6379"
+          echo "Instance IP utilisée: ${INSTANCE_IP}"
+          echo ""
+          echo "Accès à l'application:"
+          echo "  Frontend:   http://${INSTANCE_IP}:8080"
+          echo "  API REST:   http://${INSTANCE_IP}:8000"
+          echo "  PostgreSQL: ${INSTANCE_IP}:5432"
+          echo "  Redis:      ${INSTANCE_IP}:6379"
           echo "=========================================="
 
   notify:
