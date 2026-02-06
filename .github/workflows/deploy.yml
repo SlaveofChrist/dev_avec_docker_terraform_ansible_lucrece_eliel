@@ -40,6 +40,27 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Clean Up Existing AWS Resources
+        run: |
+          echo "Nettoyage des ressources AWS existantes..."
+          
+          # Supprimer la clé SSH si elle existe
+          if aws ec2 describe-key-pairs --key-names app-key-terraform 2>/dev/null | grep -q "app-key-terraform"; then
+            echo "Suppression de la clé SSH: app-key-terraform"
+            aws ec2 delete-key-pair --key-name app-key-terraform || true
+          fi
+          
+          # Supprimer le Security Group si il existe
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=app-sg-fullstack" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          if [ "$SG_ID" != "None" ] && [ ! -z "$SG_ID" ]; then
+            echo "Suppression du Security Group: $SG_ID"
+            aws ec2 delete-security-group --group-id $SG_ID || true
+            sleep 5
+          fi
+          
+          echo "Nettoyage terminé."
+        continue-on-error: true
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
