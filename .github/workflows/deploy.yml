@@ -45,6 +45,21 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Terraform Init (Check State)
+        run: terraform init
+        working-directory: ${{ github.workspace }}
+        continue-on-error: true
+
+      - name: Destroy Existing Resources
+        run: |
+          if [ -f terraform.tfstate ]; then
+            echo "État Terraform trouvé. Destruction des ressources existantes..."
+            terraform destroy -auto-approve
+          else
+            echo "Aucun état Terraform existant. Pas de destruction nécessaire."
+          fi
+        working-directory: ${{ github.workspace }}
+
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         continue-on-error: true
