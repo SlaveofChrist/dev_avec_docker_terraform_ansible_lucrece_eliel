@@ -169,6 +169,12 @@ jobs:
           echo "✅ Instance IP: $INSTANCE_IP"
           echo "=========================================="
 
+      - name: Upload SSH Key
+        uses: actions/upload-artifact@v3
+        with:
+          name: ssh-key
+          path: infra/app-key-terraform.pem
+
   # ============================================================================
   # JOB 3 : ANSIBLE (BRIDGE + DEPLOYMENT)
   # ============================================================================
@@ -208,23 +214,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install ansible paramiko
 
-      - name: Retrieve SSH Key from Terraform
-        working-directory: infra
+      - name: Download SSH Key
+        uses: actions/download-artifact@v3
+        with:
+          name: ssh-key
+          path: .
+
+      - name: Verify SSH Key
         run: |
-          # La clé privée a été créée par Terraform lors du apply
           if [ ! -f app-key-terraform.pem ]; then
             echo "❌ ERREUR: Clé SSH non trouvée!"
             exit 1
           fi
-          echo "✅ Clé SSH récupérée depuis infra/"
-
-          # Copier la clé à la racine pour Ansible
-          cp app-key-terraform.pem ../app-key-terraform.pem
-
-      - name: Set SSH Key Permissions
-        run: |
+          echo "✅ Clé SSH récupérée."
           chmod 600 app-key-terraform.pem
-          echo "✅ Permissions de la clé SSH définie (chmod 600)"
 
       - name: Update Inventory with Dynamic IP
         run: |
