@@ -1,7 +1,7 @@
 name: Deploy Infrastructure & Application
 
 on:
-  workflow_dispatch:  # Déclenchement manuel depuis GitHub UI
+  workflow_dispatch: # Déclenchement manuel depuis GitHub UI
 
 env:
   AWS_REGION: eu-west-3
@@ -21,11 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta.outputs.tags }}
-    
+
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -69,7 +69,6 @@ jobs:
           echo "Image: ${{ steps.meta.outputs.tags }}"
           echo "=========================================="
 
-
   # ============================================================================
   # JOB 2 : TERRAFORM
   # ============================================================================
@@ -84,7 +83,7 @@ jobs:
     needs: build
     outputs:
       instance_ip: ${{ steps.tf_output.outputs.instance_ip }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -99,7 +98,7 @@ jobs:
       - name: Clean Up Existing AWS Resources
         run: |
           echo "🧹 Nettoyage des ressources AWS existantes..."
-          
+
           # Supprimer les instances EC2 existantes (avec le tag Terraform-App-FullStack)
           INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=Terraform-App-FullStack" "Name=instance-state-name,Values=running,stopped" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
           if [ ! -z "$INSTANCE_IDS" ]; then
@@ -107,13 +106,13 @@ jobs:
             aws ec2 terminate-instances --instance-ids $INSTANCE_IDS || true
             aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS 2>/dev/null || true
           fi
-          
+
           # Supprimer la clé SSH
           if aws ec2 describe-key-pairs --key-names app-key-terraform 2>/dev/null | grep -q "app-key-terraform"; then
             echo "  - Suppression de la clé SSH: app-key-terraform"
             aws ec2 delete-key-pair --key-name app-key-terraform || true
           fi
-          
+
           # Supprimer le Security Group
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=app-sg-fullstack" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$SG_ID" != "None" ] && [ ! -z "$SG_ID" ]; then
@@ -128,7 +127,7 @@ jobs:
               fi
             done
           fi
-          
+
           echo "✅ Nettoyage terminé"
         continue-on-error: true
 
@@ -136,6 +135,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
       - name: Terraform Init
         working-directory: infra
@@ -160,15 +160,14 @@ jobs:
           echo "=========================================="
           echo "📍 Récupération de l'IP de l'instance..."
           echo "=========================================="
-          
+
           INSTANCE_IP=$(terraform output -raw instance_ip)
-          
+
           # Output pour les jobs suivants
           echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
-          
+
           echo "✅ Instance IP: $INSTANCE_IP"
           echo "=========================================="
-
 
   # ============================================================================
   # JOB 3 : ANSIBLE (BRIDGE + DEPLOYMENT)
@@ -185,7 +184,7 @@ jobs:
     needs: terraform
     env:
       INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -196,7 +195,7 @@ jobs:
           echo "🔗 Vérification du pont Terraform -> Ansible"
           echo "=========================================="
           echo "Instance IP reçue: ${INSTANCE_IP}"
-          
+
           if [ -z "${INSTANCE_IP}" ]; then
             echo "❌ ERREUR: L'IP de l'instance n'a pas été transmise!"
             exit 1
@@ -218,7 +217,7 @@ jobs:
             exit 1
           fi
           echo "✅ Clé SSH récupérée depuis infra/"
-          
+
           # Copier la clé à la racine pour Ansible
           cp app-key-terraform.pem ../app-key-terraform.pem
 
@@ -232,7 +231,7 @@ jobs:
           echo "=========================================="
           echo "📝 Mise à jour de l'inventaire Ansible"
           echo "=========================================="
-          
+
           # Créer inventaire dynamique avec l'IP de Terraform
           cat > inventory.ini << EOF
           [app_hosts]
@@ -243,7 +242,7 @@ jobs:
           ansible_ssh_private_key_file=./app-key-terraform.pem
           ansible_ssh_common_args='-o StrictHostKeyChecking=no'
           EOF
-          
+
           echo "Contenu de l'inventaire:"
           cat inventory.ini
           echo "=========================================="
@@ -263,15 +262,15 @@ jobs:
           echo "=========================================="
           echo "🚀 Exécution du playbook Ansible"
           echo "=========================================="
-          
+
           ansible-playbook -i inventory.ini ansible/playbook.yml -v \
             -e "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" \
             -e "GITHUB_ACTOR=${{ github.actor }}" \
             -e "GITHUB_REPOSITORY=${{ github.repository }}"
-          
+
           echo "=========================================="
         env:
-          ANSIBLE_HOST_KEY_CHECKING: 'False'
+          ANSIBLE_HOST_KEY_CHECKING: "False"
 
       - name: ✅ Verify Deployment
         run: |
@@ -291,7 +290,6 @@ jobs:
           echo "   Redis:      ${INSTANCE_IP}:6379"
           echo "=========================================="
 
-
   # ============================================================================
   # JOB 4 : NOTIFY
   # ============================================================================
@@ -302,21 +300,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [terraform, ansible]
     if: always()
-    
+
     steps:
       - name: 📊 Deployment Status Summary
         run: |
           echo "=========================================="
           echo "📊 RÉSUMÉ DU DÉPLOIEMENT"
           echo "=========================================="
-          
+
           TERRAFORM_STATUS="${{ needs.terraform.result }}"
           ANSIBLE_STATUS="${{ needs.ansible.result }}"
           INSTANCE_IP="${{ needs.terraform.outputs.instance_ip }}"
-          
+
           echo "Terraform: $TERRAFORM_STATUS"
           echo "Ansible:   $ANSIBLE_STATUS"
-          
+
           if [ "$TERRAFORM_STATUS" == "success" ] && [ "$ANSIBLE_STATUS" == "success" ]; then
             echo ""
             echo "✅ SUCCÈS COMPLET!"
