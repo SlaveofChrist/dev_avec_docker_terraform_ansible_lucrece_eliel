@@ -42,7 +42,7 @@
     # 3. Copie du docker-compose.yml
     - name: Copie du docker-compose.yml
       template:
-        src: docker-compose.yml
+        src: ../docker-compose.yml
         dest: "{{ project_dir }}/docker-compose.yml"
         owner: ubuntu
         group: ubuntu
@@ -51,7 +51,7 @@
     # 4. Copie du Dockerfile
     - name: Copie du python.Dockerfile
       template:
-        src: python.Dockerfile
+        src: ../python.Dockerfile
         dest: "{{ project_dir }}/python.Dockerfile"
         owner: ubuntu
         group: ubuntu
@@ -60,7 +60,7 @@
     # 5. Copie de l'application Python
     - name: Copie de l'application Python (app/main.py)
       template:
-        src: app/main.py
+        src: ../app/main.py
         dest: "{{ project_dir }}/app/main.py"
         owner: ubuntu
         group: ubuntu
@@ -69,7 +69,7 @@
     # 6. Copie des requirements
     - name: Copie de requirements.txt
       template:
-        src: requirements.txt
+        src: ../requirements.txt
         dest: "{{ project_dir }}/requirements.txt"
         owner: ubuntu
         group: ubuntu
@@ -78,7 +78,7 @@
     # 7. Copie du frontend
     - name: Copie du frontend (index.html)
       template:
-        src: frontend/index.html
+        src: ../frontend/index.html
         dest: "{{ project_dir }}/frontend/index.html"
         owner: ubuntu
         group: ubuntu
@@ -87,7 +87,7 @@
     # 8. Copie des fichiers de migration SQL
     - name: Copie des fichiers SQL de migration
       template:
-        src: "sqlfiles/{{ item }}"
+        src: "../sqlfiles/{{ item }}"
         dest: "{{ project_dir }}/sqlfiles/{{ item }}"
         owner: ubuntu
         group: ubuntu
