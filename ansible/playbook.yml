@@ -109,6 +109,8 @@
       command: docker compose up --build --force-recreate -d
       args:
         chdir: "{{ project_dir }}"
+      environment: 
+        GITHUB_REPOSITORY_OWNER: "{{ GITHUB_REPOSITORY_OWNER }}"
 
     # 11. Vérification du statut des conteneurs
     - name: Récupération du statut des conteneurs
