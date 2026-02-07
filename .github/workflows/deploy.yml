@@ -265,12 +265,13 @@ jobs:
           echo "=========================================="
           echo "🚀 Exécution du playbook Ansible"
           echo "=========================================="
+          REPO_OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
 
           ansible-playbook -i inventory.ini ansible/playbook.yml -v \
             -e "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" \
             -e "GITHUB_ACTOR=${{ github.actor }}" \
             -e "GITHUB_REPOSITORY=${{ github.repository }}" \
-            -e "GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }}"
+            -e "GITHUB_REPOSITORY_OWNER=${REPO_OWNER_LOWER}"
 
           echo "=========================================="
         env:
