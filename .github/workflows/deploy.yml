@@ -1,31 +1,87 @@
 name: Deploy Infrastructure & Application
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'main.tf'
-      - 'playbook.yml'
-      - 'inventory.ini'
-      - 'docker-compose.yml'
-      - 'python.Dockerfile'
-      - 'requirements.txt'
-      - 'app/**'
-      - 'frontend/**'
-      - 'sqlfiles/**'
-      - '.github/workflows/deploy.yml'
-  workflow_dispatch:  # Permet de déclencher manuellement
+  workflow_dispatch:  # Déclenchement manuel depuis GitHub UI
 
 env:
   AWS_REGION: eu-west-3
   TF_VERSION: "1.2"
+  REGISTRY: ghcr.io
 
 jobs:
+  # ============================================================================
+  # JOB 1 : BUILD & PUBLISH
+  # ============================================================================
+  # Objectif: Construire l'image Docker de l'API et la pousser vers GHCR
+  # Contrainte 1: Push vers le registre privé (GHCR)
+  # Contrainte 2: Aucun secret en clair (utilise GITHUB_TOKEN)
+  # ============================================================================
+  build:
+    name: Build & Publish Docker Images
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags and labels)
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/app-api
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest
+
+      - name: Build and push API Docker image to GHCR
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./python.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 📦 Build Complete
+        run: |
+          echo "=========================================="
+          echo "✅ Images Docker construites et publiées vers GHCR"
+          echo "=========================================="
+          echo "Image: ${{ steps.meta.outputs.tags }}"
+          echo "=========================================="
+
+
+  # ============================================================================
+  # JOB 2 : TERRAFORM
+  # ============================================================================
+  # Objectif: Créer l'infrastructure AWS (EC2, SG, clé SSH)
+  # Contrainte 1: AMI dynamique (pas hardcodée)
+  # Contrainte 2: Clé SSH générée à la volée
+  # Contrainte 3: Output IP publique pour Ansible
+  # ============================================================================
   terraform:
     name: Terraform Plan & Apply
     runs-on: ubuntu-latest
+    needs: build
     outputs:
       instance_ip: ${{ steps.tf_output.outputs.instance_ip }}
     
@@ -42,44 +98,38 @@ jobs:
 
       - name: Clean Up Existing AWS Resources
         run: |
-          echo "Nettoyage des ressources AWS existantes..."
+          echo "🧹 Nettoyage des ressources AWS existantes..."
           
-          # Supprimer les instances EC2 existantes
+          # Supprimer les instances EC2 existantes (avec le tag Terraform-App-FullStack)
           INSTANCE_IDS=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=Terraform-App-FullStack" "Name=instance-state-name,Values=running,stopped" --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
           if [ ! -z "$INSTANCE_IDS" ]; then
-            echo "Suppression des instances EC2: $INSTANCE_IDS"
+            echo "  - Suppression des instances EC2: $INSTANCE_IDS"
             aws ec2 terminate-instances --instance-ids $INSTANCE_IDS || true
             aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS 2>/dev/null || true
-            echo "Instances terminées."
           fi
           
-          # Supprimer la clé SSH si elle existe
+          # Supprimer la clé SSH
           if aws ec2 describe-key-pairs --key-names app-key-terraform 2>/dev/null | grep -q "app-key-terraform"; then
-            echo "Suppression de la clé SSH: app-key-terraform"
+            echo "  - Suppression de la clé SSH: app-key-terraform"
             aws ec2 delete-key-pair --key-name app-key-terraform || true
           fi
           
-          # Supprimer le Security Group (attendre que les interfaces réseau soient libérées)
+          # Supprimer le Security Group
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=app-sg-fullstack" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
           if [ "$SG_ID" != "None" ] && [ ! -z "$SG_ID" ]; then
-            echo "Security Group trouvé: $SG_ID"
-            # Attendre 30 secondes que les instances soient complètement libérées
-            echo "Attente de 30 secondes avant suppression du Security Group..."
+            echo "  - Suppression du Security Group: $SG_ID"
             sleep 30
-            
-            # Essayer de supprimer le SG plusieurs fois
             for i in {1..5}; do
               if aws ec2 delete-security-group --group-id $SG_ID 2>/dev/null; then
-                echo "Security Group supprimé avec succès."
+                echo "    ✓ Security Group supprimé"
                 break
               else
-                echo "Tentative $i échouée. Nouvelle tentative dans 10 secondes..."
                 sleep 10
               fi
             done
           fi
           
-          echo "Nettoyage terminé."
+          echo "✅ Nettoyage terminé"
         continue-on-error: true
 
       - name: Setup Terraform
@@ -87,84 +137,63 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init (Check State)
-        run: terraform init
-        working-directory: ${{ github.workspace }}
-        continue-on-error: true
-
-      - name: Destroy Existing Resources
-        run: |
-          if [ -f terraform.tfstate ]; then
-            echo "État Terraform trouvé. Destruction des ressources existantes..."
-            terraform destroy -auto-approve
-          else
-            echo "Aucun état Terraform existant. Pas de destruction nécessaire."
-          fi
-        working-directory: ${{ github.workspace }}
-
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        continue-on-error: true
-
       - name: Terraform Init
+        working-directory: infra
         run: terraform init
-        working-directory: ${{ github.workspace }}
 
       - name: Terraform Validate
+        working-directory: infra
         run: terraform validate
-        working-directory: ${{ github.workspace }}
 
       - name: Terraform Plan
+        working-directory: infra
         run: terraform plan -out=tfplan
-        working-directory: ${{ github.workspace }}
 
       - name: Terraform Apply
+        working-directory: infra
         run: terraform apply -auto-approve tfplan
-        working-directory: ${{ github.workspace }}
 
-      - name: Get Instance IP
+      - name: Get Instance IP (Terraform Output)
         id: tf_output
+        working-directory: infra
         run: |
           echo "=========================================="
-          echo "Récupération de l'IP de l'instance EC2..."
+          echo "📍 Récupération de l'IP de l'instance..."
           echo "=========================================="
           
-          INSTANCE_IP=$(terraform output -raw instance_ip 2>/dev/null)
-          INSTANCE_IP=$(echo $INSTANCE_IP | sed 's/::.*//')
+          INSTANCE_IP=$(terraform output -raw instance_ip)
           
-          # Stockage dans les outputs (pour le job notify)
-          echo "instance_ip=${INSTANCE_IP}" >> $GITHUB_OUTPUT
+          # Output pour les jobs suivants
+          echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
           
-          # Stockage dans GITHUB_ENV (accessible dans les étapes du Terraform job)
-          echo "INSTANCE_IP=${INSTANCE_IP}" >> $GITHUB_ENV
-          
-          echo "✅ Instance IP extraite: ${INSTANCE_IP}"
-        working-directory: ${{ github.workspace }}
-        env:
-          TF_LOG: off
+          echo "✅ Instance IP: $INSTANCE_IP"
+          echo "=========================================="
 
-      - name: Save Terraform State (Artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-state
-          path: terraform.tfstate
 
+  # ============================================================================
+  # JOB 3 : ANSIBLE (BRIDGE + DEPLOYMENT)
+  # ============================================================================
+  # Objectif: Configurer le serveur et déployer l'application
+  # Contrainte 1: Récupérer l'IP depuis Terraform
+  # Contrainte 2: Utiliser la clé SSH générée par Terraform
+  # Contrainte 3: Docker login vers GHCR (registre privé)
+  # Contrainte 4: Pas de secret en clair
+  # ============================================================================
   ansible:
     name: Ansible Deploy
     runs-on: ubuntu-latest
     needs: terraform
     env:
-      # Récupération de l'IP créée par Terraform (disponible dans tout le job)
       INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Verify Instance IP Passed
+      - name: 🔗 Bridge Verification (Terraform -> Ansible)
         run: |
           echo "=========================================="
-          echo "Vérification du pont Terraform -> Ansible"
+          echo "🔗 Vérification du pont Terraform -> Ansible"
           echo "=========================================="
           echo "Instance IP reçue: ${INSTANCE_IP}"
           
@@ -173,69 +202,101 @@ jobs:
             exit 1
           fi
           echo "✅ IP valide reçue depuis Terraform"
+          echo "=========================================="
 
-      - name: Install Ansible
+      - name: Install Ansible & Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install ansible paramiko
 
-      - name: Update inventory.ini with Instance IP
+      - name: Retrieve SSH Key from Terraform
+        working-directory: infra
         run: |
-          echo "=========================================="
-          echo "Mise à jour de l'inventory.ini"
-          echo "=========================================="
-          echo "Utilisation de l'IP: ${INSTANCE_IP}"
+          # La clé privée a été créée par Terraform lors du apply
+          if [ ! -f app-key-terraform.pem ]; then
+            echo "❌ ERREUR: Clé SSH non trouvée!"
+            exit 1
+          fi
+          echo "✅ Clé SSH récupérée depuis infra/"
           
-          # Backup de l'inventory original
-          cp inventory.ini inventory.ini.bak
-          
-          # Remplacement de l'IP dynamiquement
-          sed -i "s/^# Cette IP sera remplacée par la sortie de main.tf$/# Instance IP: ${INSTANCE_IP}/" inventory.ini
-          sed -i "s/^13\.39\.13\.141$/${INSTANCE_IP}/" inventory.ini
-          sed -i "s/^[0-9.]\{7,15\}$/${INSTANCE_IP}/" inventory.ini
-          
-          echo "Contenu de l'inventory.ini mis à jour:"
-          cat inventory.ini
-
-      - name: Download SSH Key from Terraform
-        run: |
-          ls -la app-key-terraform.pem 2>/dev/null || echo "SSH key will be created by terraform"
+          # Copier la clé à la racine pour Ansible
+          cp app-key-terraform.pem ../app-key-terraform.pem
 
       - name: Set SSH Key Permissions
         run: |
-          if [ -f app-key-terraform.pem ]; then
-            chmod 600 app-key-terraform.pem
-          fi
+          chmod 600 app-key-terraform.pem
+          echo "✅ Permissions de la clé SSH définie (chmod 600)"
 
-      - name: Update SSH Config
+      - name: Update Inventory with Dynamic IP
+        run: |
+          echo "=========================================="
+          echo "📝 Mise à jour de l'inventaire Ansible"
+          echo "=========================================="
+          
+          # Créer inventaire dynamique avec l'IP de Terraform
+          cat > inventory.ini << EOF
+[app_hosts]
+${INSTANCE_IP}
+
+[app_hosts:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=./app-key-terraform.pem
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+EOF
+          
+          echo "Contenu de l'inventaire:"
+          cat inventory.ini
+          echo "=========================================="
+
+      - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
-          echo "Host *" >> ~/.ssh/config
-          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+          cat >> ~/.ssh/config << EOF
+Host *
+  StrictHostKeyChecking no
+  UserKnownHostsFile=/dev/null
+EOF
           chmod 600 ~/.ssh/config
 
-      - name: Run Ansible Playbook
+      - name: 🚀 Run Ansible Playbook
         run: |
-          ansible-playbook -i inventory.ini playbook.yml -v
+          echo "=========================================="
+          echo "🚀 Exécution du playbook Ansible"
+          echo "=========================================="
+          
+          ansible-playbook -i inventory.ini ansible/playbook.yml -v \
+            -e "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" \
+            -e "GITHUB_ACTOR=${{ github.actor }}" \
+            -e "GITHUB_REPOSITORY=${{ github.repository }}"
+          
+          echo "=========================================="
         env:
           ANSIBLE_HOST_KEY_CHECKING: 'False'
 
-      - name: Verify Deployment
+      - name: ✅ Verify Deployment
         run: |
           echo ""
           echo "=========================================="
-          echo "Déploiement terminé!"
+          echo "✅ Déploiement terminé!"
           echo "=========================================="
-          echo "Instance IP utilisée: ${INSTANCE_IP}"
+          echo "Instance IP: ${INSTANCE_IP}"
           echo ""
-          echo "Accès à l'application:"
-          echo "  Frontend:   http://${INSTANCE_IP}:8080"
-          echo "  API REST:   http://${INSTANCE_IP}:8000"
-          echo "  PostgreSQL: ${INSTANCE_IP}:5432"
-          echo "  Redis:      ${INSTANCE_IP}:6379"
+          echo "🌐 Accès à l'application:"
+          echo "   Frontend:   http://${INSTANCE_IP}:8080"
+          echo "   API REST:   http://${INSTANCE_IP}:8000"
+          echo "   API Docs:   http://${INSTANCE_IP}:8000/docs"
+          echo ""
+          echo "🗄️  Services internes:"
+          echo "   PostgreSQL: ${INSTANCE_IP}:5432"
+          echo "   Redis:      ${INSTANCE_IP}:6379"
           echo "=========================================="
 
+
+  # ============================================================================
+  # JOB 4 : NOTIFY
+  # ============================================================================
+  # Objectif: Afficher un résumé final du déploiement
+  # ============================================================================
   notify:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
@@ -243,13 +304,30 @@ jobs:
     if: always()
     
     steps:
-      - name: Check Deployment Status
+      - name: 📊 Deployment Status Summary
         run: |
-          if [ "${{ needs.terraform.result }}" == "success" ] && [ "${{ needs.ansible.result }}" == "success" ]; then
-            echo "✅ Deployment successful!"
-            echo "Instance IP: ${{ needs.terraform.outputs.instance_ip }}"
+          echo "=========================================="
+          echo "📊 RÉSUMÉ DU DÉPLOIEMENT"
+          echo "=========================================="
+          
+          TERRAFORM_STATUS="${{ needs.terraform.result }}"
+          ANSIBLE_STATUS="${{ needs.ansible.result }}"
+          INSTANCE_IP="${{ needs.terraform.outputs.instance_ip }}"
+          
+          echo "Terraform: $TERRAFORM_STATUS"
+          echo "Ansible:   $ANSIBLE_STATUS"
+          
+          if [ "$TERRAFORM_STATUS" == "success" ] && [ "$ANSIBLE_STATUS" == "success" ]; then
+            echo ""
+            echo "✅ SUCCÈS COMPLET!"
+            echo ""
+            echo "🔗 Accédez à l'application:"
+            echo "   http://$INSTANCE_IP:8080"
+            echo ""
             exit 0
           else
-            echo "❌ Deployment failed!"
+            echo ""
+            echo "❌ ÉCHEC DU DÉPLOIEMENT"
+            echo "   Vérifiez les logs ci-dessus pour plus de détails"
             exit 1
           fi
