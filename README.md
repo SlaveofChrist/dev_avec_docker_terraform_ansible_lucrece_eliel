@@ -94,11 +94,12 @@ Une fois le déploiement terminé :
 ```
 .
 ├── app/                 # Code source de l'API (FastAPI)
+├── ansible/             # Contient le playbook et l'inventory
+├── docker/              # Contient le docker permettant de récupérer depuis l'image api depuis le ghcr
 ├── frontend/            # Code source du Frontend (HTML/JS)
+├── infra/               # Contient le main.tf
 ├── sqlfiles/            # Scripts d'initialisation SQL
-├── main.tf              # Configuration Terraform
-├── playbook.yml         # Playbook Ansible
-├── docker-compose.yml   # Définition des services Docker
+├── docker-compose.yml   # Définition des services Docker 
 ├── python.Dockerfile    # Dockerfile pour l'API
 └── requirements.txt     # Dépendances Python
 ```
