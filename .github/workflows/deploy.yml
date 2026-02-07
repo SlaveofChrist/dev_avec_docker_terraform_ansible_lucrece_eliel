@@ -235,14 +235,14 @@ jobs:
           
           # Créer inventaire dynamique avec l'IP de Terraform
           cat > inventory.ini << EOF
-[app_hosts]
-${INSTANCE_IP}
+          [app_hosts]
+          ${INSTANCE_IP}
 
-[app_hosts:vars]
-ansible_user=ubuntu
-ansible_ssh_private_key_file=./app-key-terraform.pem
-ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-EOF
+          [app_hosts:vars]
+          ansible_user=ubuntu
+          ansible_ssh_private_key_file=./app-key-terraform.pem
+          ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+          EOF
           
           echo "Contenu de l'inventaire:"
           cat inventory.ini
@@ -252,10 +252,10 @@ EOF
         run: |
           mkdir -p ~/.ssh
           cat >> ~/.ssh/config << EOF
-Host *
-  StrictHostKeyChecking no
-  UserKnownHostsFile=/dev/null
-EOF
+          Host *
+            StrictHostKeyChecking no
+            UserKnownHostsFile=/dev/null
+          EOF
           chmod 600 ~/.ssh/config
 
       - name: 🚀 Run Ansible Playbook
