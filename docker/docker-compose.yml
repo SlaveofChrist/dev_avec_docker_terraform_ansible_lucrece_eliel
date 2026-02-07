@@ -40,7 +40,7 @@ services:
 
   # 4. API (Python) - Image depuis GHCR (registre privé)
   api:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/app-api:${IMAGE_TAG:-latest}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/app-api:latest
     pull_policy: always
     restart: always
     ports:
